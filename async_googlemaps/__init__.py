@@ -15,7 +15,7 @@
 # the License.
 #
 
-__version__ = "0.0.8"
+__version__ = "0.0.9"
 
 from async_googlemaps.async_client import AsyncClient
 from async_googlemaps import exceptions

@@ -149,11 +149,16 @@ class AsyncClient:
     headers.update({"User-Agent": _USER_AGENT})
     self.aiohttp_kwargs.update({
       "headers": headers,
-      # "timeout": self.timeout,
-      # "verify": True,  # NOTE(cbro): verify SSL certs.
     })
 
-    self.aiohttp_client = aiohttp_client or aiohttp.ClientSession()
+    self.client_provided = False
+    self.aiohttp_client = aiohttp_client
+    if self.aiohttp_client:
+      self.client_provided = True
+    else:
+      self.aiohttp_client = aiohttp.ClientSession()
+    print(f'client provided: {self.client_provided}')
+
     self.aiohttp_client.headers.update(headers)
 
     self.queries_per_second = queries_per_second
@@ -162,12 +167,27 @@ class AsyncClient:
     self.set_experience_id(experience_id)
     self.base_url = base_url
 
+  async def __aenter__(self):
+    return self
+
+  async def __aexit__(self, *exc_info):
+    if not self.client_provided:
+      await self.aiohttp_client.close()
+
   def __del__(self):
-    loop = asyncio.get_event_loop()
-    if loop.is_running():
-      loop.create_task(self.aiohttp_client.close())
-    else:
-      loop.run_until_complete(self.aiohttp_client.close())
+    try:
+      if not self.client_provided:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+          loop.create_task(self.aiohttp_client.close())
+        else:
+          loop.run_until_complete(self.aiohttp_client.close())
+    except:
+      pass
+
+  async def close(self):
+    if not self.client_provided:
+      await self.aiohttp_client.close()
 
   def set_experience_id(self, *experience_id_args):
     """Sets the value for the HTTP header field name
@@ -280,44 +300,41 @@ class AsyncClient:
       requests_method = self.aiohttp_client.post
       final_requests_kwargs["json"] = post_json
     try:
-      response = await requests_method(base_url + authed_url, **final_requests_kwargs)
+      async with requests_method(base_url + authed_url, **final_requests_kwargs) as response:
+        if response.status in _RETRIABLE_STATUSES:
+          # Retry request.
+          return await self._request(url, params, first_request_time,
+                                     retry_counter + 1, base_url, accepts_clientid,
+                                     extract_body, aiohttp_kwargs, post_json)
+
+        # Check if the time of the nth previous query (where n is
+        # queries_per_second) is under a second ago - if so, sleep for
+        # the difference.
+        if self.sent_times and len(self.sent_times) == self.queries_per_second:
+          elapsed_since_earliest = time.time() - self.sent_times[0]
+          if elapsed_since_earliest < 1:
+            time.sleep(1 - elapsed_since_earliest)
+
+        try:
+          if extract_body:
+            result = await extract_body(response)
+          else:
+            result = await self._get_body(response)
+          self.sent_times.append(time.time())
+          return result
+        except exceptions._RetriableRequest as e:
+          if isinstance(e, exceptions._OverQueryLimit) and not self.retry_over_query_limit:
+            raise
+
+          # Retry request.
+          return self._request(url, params, first_request_time,
+                               retry_counter + 1, base_url, accepts_clientid,
+                               extract_body, aiohttp_kwargs, post_json)
 
     except asyncio.TimeoutError:
       raise exceptions.Timeout()
-    # except requests.exceptions.Timeout:
-    #   raise exceptions.Timeout()
     except Exception as e:
       raise exceptions.TransportError(e)
-
-    if response.status in _RETRIABLE_STATUSES:
-      # Retry request.
-      return await self._request(url, params, first_request_time,
-                                 retry_counter + 1, base_url, accepts_clientid,
-                                 extract_body, aiohttp_kwargs, post_json)
-
-    # Check if the time of the nth previous query (where n is
-    # queries_per_second) is under a second ago - if so, sleep for
-    # the difference.
-    if self.sent_times and len(self.sent_times) == self.queries_per_second:
-      elapsed_since_earliest = time.time() - self.sent_times[0]
-      if elapsed_since_earliest < 1:
-        time.sleep(1 - elapsed_since_earliest)
-
-    try:
-      if extract_body:
-        result = await extract_body(response)
-      else:
-        result = await self._get_body(response)
-      self.sent_times.append(time.time())
-      return result
-    except exceptions._RetriableRequest as e:
-      if isinstance(e, exceptions._OverQueryLimit) and not self.retry_over_query_limit:
-        raise
-
-      # Retry request.
-      return self._request(url, params, first_request_time,
-                           retry_counter + 1, base_url, accepts_clientid,
-                           extract_body, aiohttp_kwargs, post_json)
 
   async def _get(self, *args, **kwargs):  # Backwards compatibility.
     return await self._request(*args, **kwargs)
@@ -333,11 +350,9 @@ class AsyncClient:
       return body
 
     if api_status == "OVER_QUERY_LIMIT":
-      raise exceptions._OverQueryLimit(
-        api_status, body.get("error_message"))
+      raise exceptions._OverQueryLimit(api_status, body.get("error_message"))
 
-    raise exceptions.ApiError(api_status,
-                              body.get("error_message"))
+    raise exceptions.ApiError(api_status, body.get("error_message"))
 
   def _generate_auth_url(self, path, params, accepts_clientid):
     """Returns the path and query string portion of the request URL, first
@@ -350,7 +365,6 @@ class AsyncClient:
         :type params: dict or list of key/value tuples
 
         :rtype: string
-
         """
     # Deterministic ordering through sorting by key.
     # Useful for tests, and in the future, any caching.
