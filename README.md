@@ -20,10 +20,14 @@ It includes all APIs used in [google-maps-services-python](https://github.com/go
 
 ## Key Differences
 
- - At time of writing, [aiohttp](https://github.com/aio-libs/aiohttp) (basically an async version of Python's requests 
-library for those unfamiliar) is used internally for making http requests and can't be substituted.
-   - This is only due to my lack of familiarity with other asynchronous libraries
- - The async client is designed to be used as a context manager
+ - At time of writing, [aiohttp](https://github.com/aio-libs/aiohttp) is used for making asynchronous http requests 
+and (for now) can't be substituted.
+   - When creating the `async_googlemaps.AsyncClient` object, an `aiohttp.ClientSession` object is a required argument.
+   - The synchronous `googlemaps.Client` has an optional parameter, `requests_session`, which is the synchronous version.
+   - It's required here because (to my knowledge) there's no way to (internally) ensure the async client can be properly closed 
+   before the event-loop is closed, therefore it must be handled on the user's end.
+   - If you're unfamiliar with `aiohttp`, you should go read the Client quickstart guide
+   in the [aiohttp docs]('https://docs.aiohttp.org/')
    - See Usage for details
 ## Requirements
 
@@ -45,83 +49,55 @@ For even more information on getting started with Google Maps Platform and gener
 
 ## Usage
 
-There are a few ways to use `async_googlemaps`
-
-If you've used the [aiohttp](https://github.com/aio-libs/aiohttp) format,
-this will look familiar. If you're unfamiliar, I'd suggest reading the `aiohttp` quickstart docs first.
+There are basically two ways to create the `async_googlemaps.AsyncClient`
 
 These examples use the Geocoding API and the Directions API with an API key:
 
-1. Use `async_googlemaps` within its own context manager
+1. ('Preferred' usage) Use an async context manager for the `aiohttp.ClientSession` that will be passed to the
+`async_googlemaps.AsyncClient`
 ```python
 from async_googlemaps import AsyncClient
+import aiohttp
 from datetime import datetime
 
 async def main():
-  async with AsyncClient(key='Add Your Key here') as gmaps:
+   async with aiohttp.ClientSession() as maps_session:
+      gmaps = AsyncClient(maps_session, key='Add Your Key here')
 
-     # Geocoding an address
-     geocode_result = await gmaps.geocode('1600 Amphitheatre Parkway, Mountain View, CA')
-       
-     # Look up an address with reverse geocoding
-     reverse_geocode_result = await gmaps.reverse_geocode((40.714224, -73.961452))
-       
-     # Request directions via public transit
-     now = datetime.now()
-     directions_result = await gmaps.directions("Sydney Town Hall",
-                                                "Parramatta, NSW",
-                                                mode="transit",
-                                                departure_time=now)
-```
-2. Use your own `aiohttp.ClientSession` object (with or without its own context manager)
-```python
-from async_googlemaps import AsyncClient
-import aiohttp
-
-
-async def main():
-   
-  #  with context manager (aio_client closes automatically)
-  async with aiohttp.ClientSession() as aio_client:
-    gmaps = AsyncClient(aiohttp_client=aio_client, key='Add Your Key here')
-
-    # Geocoding an address
-    geocode_result = await gmaps.geocode('1600 Amphitheatre Parkway, Mountain View, CA')
-  
-  #  without context manager
-  aio_client = aiohttp.ClientSession()
-  gmaps = AsyncClient(aiohttp_client= aio_client, key='Add Your Key here')
-  reverse_geocode_result = await gmaps.reverse_geocode((40.714224, -73.961452))
-  
-  # aio_client must be closed manually
-  await aio_client.close()
-```
-3. (Most safe, least flexible) Provide your own `aiohttp.ClientSession` and use it and `async_googlemaps` within context managers
-```python
-from async_googlemaps import AsyncClient
-import aiohttp
-
-async def main():
-  #  with context manager
-  async with aiohttp.ClientSession() as aio_client:
-    async with AsyncClient(aiohttp_client=aio_client, key='Add Your Key here') as gmaps:
-
+      # Then use the APIs just as you would with the synchronous version,
+      # but with an await keyword prefacing the method
+      
       # Geocoding an address
       geocode_result = await gmaps.geocode('1600 Amphitheatre Parkway, Mountain View, CA')
+          
+      # Look up an address with reverse geocoding
+      reverse_geocode_result = await gmaps.reverse_geocode((40.714224, -73.961452))
+          
+      # Request directions via public transit
+      now = datetime.now()
+      directions_result = await gmaps.directions("Sydney Town Hall",
+                                                   "Parramatta, NSW",
+                                                   mode="transit",
+                                                   departure_time=now)
 ```
-4. (Most flexible, least safe) Do not provide your own `aiohttp.ClientSession` and do not use `async_googlemaps`
-within a context manager
+2. (More flexible) Create your `aiohttp.ClientSession` object without a context-manager, and manually close the ClientSession.
+
 ```python
 from async_googlemaps import AsyncClient
+import aiohttp
+
+
 async def main():
-  
-  gmaps = AsyncClient(key='Add Your Key here')
+  session = aiohttp.ClientSession()
+  gmaps = AsyncClient(session, key='Add Your Key here')
 
   # Geocoding an address
   geocode_result = await gmaps.geocode('1600 Amphitheatre Parkway, Mountain View, CA')
   
-  # Must call gmaps.close() to close the aiohttp.ClientSession used internally
-  await gmaps.close()
+  reverse_geocode_result = await gmaps.reverse_geocode((40.714224, -73.961452))
+  
+  # aio_client must be closed manually
+  await session.close()
 ```
 
 [//]: # (For more usage examples, check out [the tests]&#40;https://github.com/googlemaps/google-maps-services-python/tree/master/tests&#41;.)

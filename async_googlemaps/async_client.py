@@ -51,14 +51,15 @@ _RETRIABLE_STATUSES = {500, 503, 504}
 class AsyncClient:
   """Performs requests to the Google Maps API web services."""
 
-  def __init__(self, aiohttp_client=None, key=None, client_id=None, client_secret=None,
+  def __init__(self, aiohttp_session, key=None, client_id=None, client_secret=None,
+               timeout=None, connect_timeout=None, read_timeout=None,
                retry_timeout=60, aiohttp_kwargs=None,
                queries_per_second=50, channel=None,
                retry_over_query_limit=True, experience_id=None,
                base_url=_DEFAULT_BASE_URL):
     """
-        :param aiohttp_client: Reused persistent session for flexibility.
-        :type aiohttp_client: aiohttp.ClientSession
+        :param aiohttp_session: Reused persistent session for flexibility.
+        :type aiohttp_session: aiohttp.ClientSession
 
         :param key: Maps API key. Required, unless "client_id" and
             "client_secret" are set. Most users should use an API key.
@@ -138,7 +139,9 @@ class AsyncClient:
                          "alphanumeric string. The period (.), underscore (_)"
                          "and hyphen (-) characters are allowed. If used without "
                          "client_id, it must be 0-999.")
-
+    if not isinstance(aiohttp_session, aiohttp.ClientSession):
+      raise ValueError("The aiohttp_client argument must me an instance of aiohttp.ClientSession"
+                       "e.g. aiohttp_client = aiohttp.ClientSession()")
     self.key = key
     self.client_id = client_id
     self.client_secret = client_secret
@@ -151,15 +154,18 @@ class AsyncClient:
       "headers": headers,
     })
 
-    self.client_provided = False
-    self.aiohttp_client = aiohttp_client
-    if self.aiohttp_client:
-      self.client_provided = True
-    else:
-      self.aiohttp_client = aiohttp.ClientSession()
-    print(f'client provided: {self.client_provided}')
+    self.aiohttp_session = aiohttp_session
+    self.aiohttp_session.headers.update(headers)
 
-    self.aiohttp_client.headers.update(headers)
+    if timeout and (connect_timeout or read_timeout):
+      raise ValueError("Specify either timeout, or connect_timeout "
+                       "and/or read_timeout")
+
+    if connect_timeout or read_timeout:
+      self.aiohttp_session.timeout.sock_connect = connect_timeout
+      self.aiohttp_session.timeout.sock_read = read_timeout
+    elif timeout:
+      self.aiohttp_session.timeout.total = timeout
 
     self.queries_per_second = queries_per_second
     self.retry_over_query_limit = retry_over_query_limit
@@ -171,23 +177,23 @@ class AsyncClient:
     return self
 
   async def __aexit__(self, *exc_info):
-    if not self.client_provided:
-      await self.aiohttp_client.close()
+    return self
 
-  def __del__(self):
-    try:
-      if not self.client_provided:
-        loop = asyncio.get_event_loop()
-        if loop.is_running():
-          loop.create_task(self.aiohttp_client.close())
-        else:
-          loop.run_until_complete(self.aiohttp_client.close())
-    except:
-      pass
-
-  async def close(self):
-    if not self.client_provided:
-      await self.aiohttp_client.close()
+  # if not self.client_provided:
+  #   await self.aiohttp_client.close()
+  # def __del__(self):
+  #   try:
+  #     if not self.client_provided:
+  #       loop = asyncio.get_event_loop()
+  #       if loop.is_running():
+  #         loop.create_task(self.aiohttp_client.close())
+  #       else:
+  #         loop.run_until_complete(self.aiohttp_client.close())
+  #   except:
+  #     pass
+  # async def close(self):
+  #   if not self.client_provided:
+  #     await self.aiohttp_client.close()
 
   def set_experience_id(self, *experience_id_args):
     """Sets the value for the HTTP header field name
@@ -202,7 +208,7 @@ class AsyncClient:
 
     headers = self.aiohttp_kwargs.pop("headers", {})
     headers[_X_GOOG_MAPS_EXPERIENCE_ID] = ",".join(experience_id_args)
-    self.aiohttp_client.headers.update(headers)
+    self.aiohttp_session.headers.update(headers)
     self.aiohttp_kwargs["headers"] = headers
 
   def get_experience_id(self):
@@ -252,10 +258,10 @@ class AsyncClient:
             params. Some APIs require API keys (e.g. Roads).
         :type accepts_clientid: bool
 
-        :param extract_body: A function that extracts the body from the request.
+        :param extract_body: A coroutine that extracts the body from the request.
             If the request was not successful, the function should raise a
             googlemaps.HTTPError or googlemaps.ApiError as appropriate.
-        :type extract_body: function
+        :type extract_body: coroutine
 
         :param aiohttp_kwargs: Same extra keywords arg for requests as per
             __init__, but provided here to allow overriding internally on a
@@ -295,9 +301,9 @@ class AsyncClient:
     final_requests_kwargs = dict(self.aiohttp_kwargs, **aiohttp_kwargs)
 
     # Determine GET/POST.
-    requests_method = self.aiohttp_client.get
+    requests_method = self.aiohttp_session.get
     if post_json is not None:
-      requests_method = self.aiohttp_client.post
+      requests_method = self.aiohttp_session.post
       final_requests_kwargs["json"] = post_json
     try:
       async with requests_method(base_url + authed_url, **final_requests_kwargs) as response:
@@ -506,6 +512,7 @@ try:
 
   # NOTE(cbro): `unicode` was removed in Python 3. In Python 3, NameError is
   # raised here, and caught below.
+
 
   def normalize_for_urlencode(value):
     """(Python 2) Converts the value to a `str` (raw bytes)."""

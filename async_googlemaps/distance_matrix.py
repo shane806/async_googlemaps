@@ -136,8 +136,3 @@ async def distance_matrix(client, origins, destinations,
     params["region"] = region
 
   return await client._request("/maps/api/distancematrix/json", params)
-
-# with open('/Users/shanehumphrey/veho/veho_python/routes.json') as f:
-#   routes = json.load(f)
-# stop1, stop2 = routes[0]['fuzzy_locs'][0]['address']['location'], routes[0]['fuzzy_locs'][0]['address']['location']
-# print(asyncio.run(distance_matrix(AsyncClient(key=os.environ['GOOGLE_MAPS_APIKEY']), stop1, stop2)))
