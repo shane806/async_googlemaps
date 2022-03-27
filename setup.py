@@ -7,7 +7,7 @@ with open("README.md") as f:
 
 setup(
     name="async_googlemaps",
-    version="0.0.8",
+    version="0.0.10",
     description="Asynchronous Python client library for Google Maps Platform",
     long_description=readme,
     long_description_content_type="text/markdown",
