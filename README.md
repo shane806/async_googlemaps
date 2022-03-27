@@ -27,7 +27,7 @@ and (for now) can't be substituted.
    - It's required here because (to my knowledge) there's no way to (internally) ensure the async client can be properly closed 
    before the event-loop is closed, therefore it must be handled on the user's end.
    - If you're unfamiliar with `aiohttp`, you should go read the Client quickstart guide
-   in the [aiohttp docs]('https://docs.aiohttp.org/')
+   in the [aiohttp docs](https://docs.aiohttp.org)
    - See Usage for details
 ## Requirements
 
